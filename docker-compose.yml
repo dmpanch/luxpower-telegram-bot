@@ -1,0 +1,13 @@
+version: '3'
+services:
+  telegram-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - LUXPOWER_ACCOUNT=${LUXPOWER_ACCOUNT}
+      - LUXPOWER_PASSWORD=${LUXPOWER_PASSWORD}
+      - LUXPOWER_STATION=${LUXPOWER_STATION}
+      - LUXPOWER_BASEURL=${LUXPOWER_BASEURL}
+    restart: always
