@@ -13,6 +13,7 @@ import (
 
 const (
 	checkInterval = 1 * time.Minute // Check every minute. BTW, the inverter pushes data to the LP cloud every 2 minutes
+	recheckDelay  = 1 * time.Minute // Delay before rechecking grid state after it changes to 0
 )
 
 var (
@@ -73,18 +74,52 @@ func (b *Bot) Start() {
 		}
 
 		b.mu.Lock()
-		if (b.previousGridState == 0 && gridState != 0) || (b.previousGridState != 0 && gridState == 0) {
+		if gridState == 0 && b.previousGridState != 0 {
 			log.Printf("Grid state changed: %d -> %d\n", b.previousGridState, gridState)
+
+			// Set current state
+			b.currentGridState = gridState
+
+			// Schedule recheck after recheckDelay
+			time.AfterFunc(recheckDelay, func() {
+				b.mu.Lock()
+				defer b.mu.Unlock()
+
+				// Recheck current state
+				currentState, err := b.getCurrentGridState()
+				if err != nil {
+					log.Println("Error re-checking current grid state:", err)
+					return
+				}
+
+				if currentState == 0 {
+					log.Println("Grid state is still 0 after recheck, sending notification.")
+					b.sendToAllGroups("Electricity state changed: Electricity is absent.")
+					b.previousGridState = currentState
+				} else {
+					log.Println("Grid state changed during recheck: 0 ->", currentState)
+					b.currentGridState = currentState
+					b.previousGridState = currentState
+				}
+			})
+
+			b.previousGridState = gridState
+		} else if gridState != 0 && b.previousGridState == 0 {
+			log.Printf("Grid state changed: %d -> %d\n", b.previousGridState, gridState)
+
+			// Set current state
 			b.currentGridState = gridState
 
 			// Send a status change message to all groups
-			message := "Electricity state changed: "
-			if gridState == 0 {
-				message += "Electricity is absent."
-			} else {
-				message += "Electricity is present."
-			}
+			message := "Electricity state changed: Electricity is present."
 			b.sendToAllGroups(message)
+
+			b.previousGridState = gridState
+		} else if gridState != b.previousGridState {
+			log.Printf("Grid state changed: %d -> %d\n", b.previousGridState, gridState)
+
+			// Set current state
+			b.currentGridState = gridState
 			b.previousGridState = gridState
 		}
 		b.mu.Unlock()
