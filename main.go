@@ -135,12 +135,12 @@ func (b *Bot) getCurrentGridState() (int, error) {
 
 	output, err := cmd.Output()
 	if err != nil {
-		return 0, err
+		return -1, err // Return -1 to indicate an error
 	}
 
 	var response LuxpowerResponse
 	if err := json.Unmarshal(output, &response); err != nil {
-		return 0, err
+		return -1, err // Return -1 to indicate an error
 	}
 
 	return response.GridToLoad, nil
