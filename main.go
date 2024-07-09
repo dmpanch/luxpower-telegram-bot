@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	checkInterval    = 1 * time.Minute // Check every minute. BTW, the invertor push data to the LP cloud every 2 minutes
+	checkInterval = 1 * time.Minute // Check every minute. BTW, the inverter pushes data to the LP cloud every 2 minutes
 )
 
 var (
@@ -41,10 +41,10 @@ func NewBot(token string) (*Bot, error) {
 		return nil, err
 	}
 	return &Bot{
-		bot:     bot,
-		currentGridState: -1, //Initialize with a value that cannot be the power supply state
+		bot:               bot,
+		currentGridState:  -1, // Initialize with a value that cannot be the power supply state
 		previousGridState: -1,
-		chatIDs: make(map[int64]bool),
+		chatIDs:           make(map[int64]bool),
 	}, nil
 }
 
@@ -85,8 +85,8 @@ func (b *Bot) Start() {
 				message += "Electricity is present."
 			}
 			b.sendToAllGroups(message)
+			b.previousGridState = gridState
 		}
-		b.previousGridState = gridState
 		b.mu.Unlock()
 	}
 }
