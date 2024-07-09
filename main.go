@@ -13,7 +13,7 @@ import (
 
 const (
 	checkInterval = 1 * time.Minute // Check every minute. BTW, the inverter pushes data to the LP cloud every 2 minutes
-	recheckDelay  = 1 * time.Minute // Delay before rechecking grid state after it changes to 0
+	recheckDelay  = 1 * time.Minute // Delay before rechecking after state change
 )
 
 var (
@@ -100,6 +100,8 @@ func (b *Bot) Start() {
 					log.Println("Grid state changed during recheck: 0 ->", currentState)
 					b.currentGridState = currentState
 					b.previousGridState = currentState
+					message := "Electricity state changed: Electricity is present."
+					b.sendToAllGroups(message)
 				}
 			})
 
@@ -155,7 +157,7 @@ func (b *Bot) handleStatusCommand(chatID int64) {
 		gridStateStr = "Electricity is absent."
 	}
 
-	msg := tgbotapi.NewMessage(chatID, "Current status: "+gridStateStr)
+	msg := tgbotapi.NewMessage(chatID, gridStateStr)
 	if _, err := b.bot.Send(msg); err != nil {
 		log.Println("Error sending message:", err)
 	}
