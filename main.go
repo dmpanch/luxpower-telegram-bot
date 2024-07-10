@@ -94,34 +94,18 @@ func (b *Bot) Start() {
 
 				if currentState == 0 {
 					log.Println("Grid state is still 0 after recheck, sending notification.")
-					b.sendToAllGroups("Electricity state changed: Electricity is absent.")
+					b.sendToAllGroups("Стан змінився: світла немає.")
 					b.previousGridState = currentState
 				} else {
 					log.Println("Grid state changed during recheck: 0 ->", currentState)
 					b.currentGridState = currentState
 					b.previousGridState = currentState
-					message := "Electricity state changed: Electricity is present."
-					b.sendToAllGroups(message)
 				}
 			})
-
-			b.previousGridState = gridState
 		} else if gridState != 0 && b.previousGridState == 0 {
 			log.Printf("Grid state changed: %d -> %d\n", b.previousGridState, gridState)
-
-			// Set current state
 			b.currentGridState = gridState
-
-			// Send a status change message to all groups
-			message := "Electricity state changed: Electricity is present."
-			b.sendToAllGroups(message)
-
-			b.previousGridState = gridState
-		} else if gridState != b.previousGridState {
-			log.Printf("Grid state changed: %d -> %d\n", b.previousGridState, gridState)
-
-			// Set current state
-			b.currentGridState = gridState
+			b.sendToAllGroups("Стан змінився: світло є.")
 			b.previousGridState = gridState
 		}
 		b.mu.Unlock()
@@ -152,9 +136,9 @@ func (b *Bot) handleUpdates(updates tgbotapi.UpdatesChannel) {
 }
 
 func (b *Bot) handleStatusCommand(chatID int64) {
-	gridStateStr := "Electricity is present."
+	gridStateStr := "Світло є."
 	if b.currentGridState == 0 {
-		gridStateStr = "Electricity is absent."
+		gridStateStr = "Світла немає."
 	}
 
 	msg := tgbotapi.NewMessage(chatID, gridStateStr)
