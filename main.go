@@ -34,6 +34,7 @@ type Bot struct {
 	previousGridState int
 	mu               sync.Mutex
 	chatIDs          map[int64]bool // Map for Chat IDs
+	recheckScheduled bool           // Flag to avoid multiple rechecks
 }
 
 func NewBot(token string) (*Bot, error) {
@@ -46,6 +47,7 @@ func NewBot(token string) (*Bot, error) {
 		currentGridState:  -1, // Initialize with a value that cannot be the power supply state
 		previousGridState: -1,
 		chatIDs:           make(map[int64]bool),
+		recheckScheduled:  false,
 	}, nil
 }
 
@@ -80,28 +82,33 @@ func (b *Bot) Start() {
 			// Set current state
 			b.currentGridState = gridState
 
-			// Schedule recheck after recheckDelay
-			time.AfterFunc(recheckDelay, func() {
-				b.mu.Lock()
-				defer b.mu.Unlock()
+			// Schedule recheck after recheckDelay if not already scheduled
+			if !b.recheckScheduled {
+				b.recheckScheduled = true
+				time.AfterFunc(recheckDelay, func() {
+					b.mu.Lock()
+					defer b.mu.Unlock()
 
-				// Recheck current state
-				currentState, err := b.getCurrentGridState()
-				if err != nil {
-					log.Println("Error re-checking current grid state:", err)
-					return
-				}
+					// Recheck current state
+					currentState, err := b.getCurrentGridState()
+					if err != nil {
+						log.Println("Error re-checking current grid state:", err)
+						return
+					}
 
-				if currentState == 0 {
-					log.Println("Grid state is still 0 after recheck, sending notification.")
-					b.sendToAllGroups("Стан змінився: світла немає.")
-					b.previousGridState = currentState
-				} else {
-					log.Println("Grid state changed during recheck: 0 ->", currentState)
-					b.currentGridState = currentState
-					b.previousGridState = currentState
-				}
-			})
+					if currentState == 0 {
+						log.Println("Grid state is still 0 after recheck, sending notification.")
+						b.sendToAllGroups("Стан змінився: світла немає.")
+						b.previousGridState = currentState
+					} else {
+						log.Println("Grid state changed during recheck: 0 ->", currentState)
+						b.currentGridState = currentState
+						b.previousGridState = currentState
+					}
+
+					b.recheckScheduled = false // Reset recheck flag
+				})
+			}
 		} else if gridState != 0 && b.previousGridState == 0 {
 			log.Printf("Grid state changed: %d -> %d\n", b.previousGridState, gridState)
 			b.currentGridState = gridState
