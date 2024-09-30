@@ -11,8 +11,11 @@ The current status can be obtained by sending the /status command to the bot.
 To run the bot you need to:
 * Register Telegram bot and get its token
 * Add token and data from Luxpower site to env, rename env to .env
+* Init bot and install dependencies
+  * `go mod init mybot`
+  * `go mod tidy`
 * Build Go binaries for the required architecture (the build could have been put into a Dockerfile, but I didn't care enough)
   * go-luxpower - https://github.com/kgf1980/go-luxpower
-    * CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o go-luxpower main.go
-  * CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o telegram-bot main.go
+    * `CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o go-luxpower main.go`
+  * `CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o telegram-bot main.go`
 * Run docker-compose
