@@ -22,6 +22,7 @@ var (
 	luxpowerPassword = getenv("LUXPOWER_PASSWORD", "")
 	luxpowerStation  = getenv("LUXPOWER_STATION", "")
 	luxpowerBaseURL  = getenv("LUXPOWER_BASEURL", "")
+	luxpowerProxyURL = getenv("LUXPOWER_PROXY_URL", "")
 	subscriberDBPath = getenv("SUBSCRIBERS_DB_PATH", "subscribers.db")
 )
 
@@ -174,12 +175,7 @@ func (b *Bot) handleStatusCommand(chatID int64) {
 }
 
 func (b *Bot) getCurrentGridState() (int, error) {
-	cmd := exec.Command("./go-luxpower", "live", "--json",
-		"--accountname", luxpowerAccount,
-		"--password", luxpowerPassword,
-		"--station", luxpowerStation,
-		"--baseurl", luxpowerBaseURL)
-
+	cmd := buildLuxpowerCommand()
 	output, err := cmd.Output()
 	if err != nil {
 		return -1, err // Return -1 to indicate an error
@@ -191,6 +187,23 @@ func (b *Bot) getCurrentGridState() (int, error) {
 	}
 
 	return response.GridToLoad, nil
+}
+
+func buildLuxpowerCommand() *exec.Cmd {
+	cmd := exec.Command("./go-luxpower", "live", "--json",
+		"--accountname", luxpowerAccount,
+		"--password", luxpowerPassword,
+		"--station", luxpowerStation,
+		"--baseurl", luxpowerBaseURL)
+
+	if luxpowerProxyURL != "" {
+		cmd.Env = append(os.Environ(),
+			"HTTP_PROXY="+luxpowerProxyURL,
+			"HTTPS_PROXY="+luxpowerProxyURL,
+		)
+	}
+
+	return cmd
 }
 
 func (b *Bot) sendToAllGroups(message string) {
