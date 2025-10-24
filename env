@@ -3,3 +3,5 @@ LUXPOWER_ACCOUNT=your-luxpower-login
 LUXPOWER_PASSWORD=your-luxpower-password
 LUXPOWER_STATION=your-luxpower-station-number
 LUXPOWER_BASEURL=https://server.luxpowertek.com/WManage
+SUBSCRIBERS_DB_PATH=./subscribers.db
+LUXPOWER_PROXY_URL=
