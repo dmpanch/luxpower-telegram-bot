@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 )
 
 func testDSN(t *testing.T) string {
@@ -48,10 +49,11 @@ func TestBotLoadsSubscribersOnInit(t *testing.T) {
 	}
 
 	bot := &Bot{
-		store:          store,
-		chatIDs:        make(map[int64]bool),
-		sendMessage:    func(int64, string) error { return nil },
-		fetchGridState: func() (int, error) { return 1, nil },
+		store:            store,
+		chatIDs:          make(map[int64]bool),
+		sendMessage:      func(int64, string) error { return nil },
+		fetchGridState:   func() (int, error) { return 1, nil },
+		lastNotification: make(map[notificationType]time.Time),
 	}
 
 	if err := bot.loadSubscribers(); err != nil {
@@ -73,10 +75,11 @@ func TestBotRegisterChatIDPersistsAndDeduplicates(t *testing.T) {
 	defer store.Close()
 
 	bot := &Bot{
-		store:          store,
-		chatIDs:        make(map[int64]bool),
-		sendMessage:    func(int64, string) error { return nil },
-		fetchGridState: func() (int, error) { return 1, nil },
+		store:            store,
+		chatIDs:          make(map[int64]bool),
+		sendMessage:      func(int64, string) error { return nil },
+		fetchGridState:   func() (int, error) { return 1, nil },
+		lastNotification: make(map[notificationType]time.Time),
 	}
 
 	bot.registerChatID(777)
@@ -114,6 +117,7 @@ func TestBroadcastInitialStatusSendsCurrentState(t *testing.T) {
 		fetchGridState:    func() (int, error) { return 0, nil },
 		currentGridState:  -1,
 		previousGridState: -1,
+		lastNotification:  make(map[notificationType]time.Time),
 	}
 
 	if err := bot.loadSubscribers(); err != nil {
@@ -134,5 +138,62 @@ func TestBroadcastInitialStatusSendsCurrentState(t *testing.T) {
 
 	if bot.currentGridState != 0 || bot.previousGridState != 0 {
 		t.Fatalf("expected current and previous grid state to be 0, got current=%d previous=%d", bot.currentGridState, bot.previousGridState)
+	}
+}
+
+func TestProcessOutageNotificationDebounce(t *testing.T) {
+	sender := newFakeSender()
+	bot := &Bot{
+		chatIDs:          map[int64]bool{1: true},
+		sendMessage:      sender.Send,
+		lastNotification: make(map[notificationType]time.Time),
+	}
+
+	if !bot.processOutageNotification() {
+		t.Fatal("expected first outage notification to be sent")
+	}
+
+	if messages := sender.SentTo(1); len(messages) != 1 || messages[0] != outageMessage {
+		t.Fatalf("unexpected outage message payloads: %v", messages)
+	}
+
+	if bot.processOutageNotification() {
+		t.Fatal("expected second outage notification to be debounced")
+	}
+
+	if messages := sender.SentTo(1); len(messages) != 1 {
+		t.Fatalf("expected single outage notification after debounce, got %v", messages)
+	}
+
+	bot.mu.Lock()
+	bot.lastNotification[notificationOutage] = time.Now().Add(-3 * time.Minute)
+	bot.mu.Unlock()
+
+	if !bot.processOutageNotification() {
+		t.Fatal("expected outage notification after cooldown")
+	}
+
+	if messages := sender.SentTo(1); len(messages) != 2 {
+		t.Fatalf("expected two outage notifications after cooldown, got %v", messages)
+	}
+}
+
+func TestHandleStatusCommandResponds(t *testing.T) {
+	sender := newFakeSender()
+	bot := &Bot{
+		chatIDs:          make(map[int64]bool),
+		sendMessage:      sender.Send,
+		lastNotification: make(map[notificationType]time.Time),
+	}
+	bot.currentGridState = 0
+
+	bot.handleStatusCommand(42)
+
+	messages := sender.SentTo(42)
+	if len(messages) != 1 {
+		t.Fatalf("expected status response, got %v", messages)
+	}
+	if messages[0] != "Світла немає." {
+		t.Fatalf("unexpected status payload %q", messages[0])
 	}
 }

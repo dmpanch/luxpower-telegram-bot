@@ -12,8 +12,11 @@ import (
 )
 
 const (
-	checkInterval = 1 * time.Minute // Check every minute. BTW, the inverter pushes data to the LP cloud every 2 minutes
-	recheckDelay  = 1 * time.Minute // Delay before rechecking after state change
+	checkInterval        = 1 * time.Minute // Check every minute. BTW, the inverter pushes data to the LP cloud every 2 minutes
+	recheckDelay         = 1 * time.Minute // Delay before rechecking after state change
+	notificationCooldown = 2 * time.Minute
+	outageMessage        = "Стан змінився: світла немає."
+	restoreMessage       = "Стан змінився: світло є."
 )
 
 var (
@@ -35,6 +38,13 @@ type subscriberStore interface {
 	Save(int64) error
 }
 
+type notificationType string
+
+const (
+	notificationOutage  notificationType = "outage"
+	notificationRestore notificationType = "restore"
+)
+
 type Bot struct {
 	bot               *tgbotapi.BotAPI
 	store             subscriberStore
@@ -45,6 +55,7 @@ type Bot struct {
 	recheckScheduled  bool           // Flag to avoid multiple rechecks
 	sendMessage       func(int64, string) error
 	fetchGridState    func() (int, error)
+	lastNotification  map[notificationType]time.Time
 }
 
 func NewBot(token string, store subscriberStore) (*Bot, error) {
@@ -59,6 +70,7 @@ func NewBot(token string, store subscriberStore) (*Bot, error) {
 		previousGridState: -1,
 		chatIDs:           make(map[int64]bool),
 		recheckScheduled:  false,
+		lastNotification:  make(map[notificationType]time.Time),
 	}
 
 	newBot.sendMessage = func(chatID int64, message string) error {
@@ -102,14 +114,13 @@ func (b *Bot) Start() {
 			continue
 		}
 
+		var triggerRestore bool
+
 		b.mu.Lock()
-		if gridState == 0 && b.previousGridState != 0 {
+		b.currentGridState = gridState
+		switch {
+		case gridState == 0 && b.previousGridState != 0:
 			log.Printf("Grid state changed: %d -> %d\n", b.previousGridState, gridState)
-
-			// Set current state
-			b.currentGridState = gridState
-
-			// Schedule recheck after recheckDelay if not already scheduled
 			if !b.recheckScheduled {
 				b.recheckScheduled = true
 				time.AfterFunc(recheckDelay, func() {
@@ -122,28 +133,35 @@ func (b *Bot) Start() {
 						return
 					}
 
-					b.mu.Lock()
 					if currentState == 0 {
-						log.Println("Grid state is still 0 after recheck, sending notification.")
-						b.sendToAllGroups("Стан змінився: світла немає.")
-						b.previousGridState = currentState
-					} else {
-						log.Println("Grid state changed during recheck: 0 ->", currentState)
-						b.currentGridState = currentState
-						b.previousGridState = currentState
+						log.Println("Grid state is still 0 after recheck; notifying subscribers if needed.")
+						if !b.processOutageNotification() {
+							log.Println("Outage notification skipped due to debounce window or no subscribers.")
+						}
+						return
 					}
 
-					b.recheckScheduled = false // Reset recheck flag
+					log.Println("Grid state changed during recheck: 0 ->", currentState)
+					b.mu.Lock()
+					b.currentGridState = currentState
+					b.previousGridState = currentState
+					b.recheckScheduled = false
 					b.mu.Unlock()
 				})
 			}
-		} else if gridState != 0 && b.previousGridState == 0 {
+		case gridState != 0 && b.previousGridState == 0:
 			log.Printf("Grid state changed: %d -> %d\n", b.previousGridState, gridState)
-			b.currentGridState = gridState
-			b.sendToAllGroups("Стан змінився: світло є.")
+			triggerRestore = true
+		default:
 			b.previousGridState = gridState
 		}
 		b.mu.Unlock()
+
+		if triggerRestore {
+			if !b.processRestoreNotification(gridState) {
+				log.Println("Restore notification skipped due to debounce window or no subscribers.")
+			}
+		}
 	}
 }
 
@@ -169,9 +187,7 @@ func (b *Bot) handleUpdates(updates tgbotapi.UpdatesChannel) {
 
 func (b *Bot) handleStatusCommand(chatID int64) {
 	gridStateStr := b.statusMessage()
-	if err := b.sendMessageToGroup(chatID, gridStateStr); err != nil {
-		log.Println("Error sending message:", err)
-	}
+	b.sendSystemMessage([]int64{chatID}, gridStateStr)
 }
 
 func (b *Bot) getCurrentGridState() (int, error) {
@@ -206,13 +222,76 @@ func buildLuxpowerCommand() *exec.Cmd {
 	return cmd
 }
 
-func (b *Bot) sendToAllGroups(message string) {
-	chatIDs := b.snapshotChatIDs()
-	for _, chatID := range chatIDs {
-		if err := b.sendMessageToGroup(chatID, message); err != nil {
-			log.Println("Error sending message:", err)
+func (b *Bot) processOutageNotification() bool {
+	b.mu.Lock()
+	now := time.Now()
+	shouldSend := b.shouldSendNotificationLocked(notificationOutage, now)
+	var chatIDs []int64
+	if shouldSend {
+		chatIDs = b.chatIDsSnapshotLocked()
+	}
+	b.previousGridState = 0
+	b.currentGridState = 0
+	b.recheckScheduled = false
+	b.mu.Unlock()
+
+	if shouldSend {
+		b.sendSystemMessage(chatIDs, outageMessage)
+		return true
+	}
+	return false
+}
+
+func (b *Bot) processRestoreNotification(state int) bool {
+	b.mu.Lock()
+	now := time.Now()
+	shouldSend := b.shouldSendNotificationLocked(notificationRestore, now)
+	var chatIDs []int64
+	if shouldSend {
+		chatIDs = b.chatIDsSnapshotLocked()
+	}
+	b.previousGridState = state
+	b.currentGridState = state
+	b.mu.Unlock()
+
+	if shouldSend {
+		b.sendSystemMessage(chatIDs, restoreMessage)
+		return true
+	}
+	return false
+}
+
+func (b *Bot) shouldSendNotificationLocked(kind notificationType, now time.Time) bool {
+	if b.lastNotification == nil {
+		b.lastNotification = make(map[notificationType]time.Time)
+	}
+	if last, ok := b.lastNotification[kind]; ok {
+		elapsed := now.Sub(last)
+		if elapsed < notificationCooldown {
+			log.Printf("Skipping %s notification due to debounce; wait %s more.", kind, (notificationCooldown - elapsed).Round(time.Second))
+			return false
 		}
 	}
+	b.lastNotification[kind] = now
+	return true
+}
+
+func (b *Bot) sendSystemMessage(chatIDs []int64, message string) {
+	if len(chatIDs) == 0 {
+		log.Printf("No subscribers to notify for message: %s", message)
+		return
+	}
+	log.Printf("Sending message to %d chat(s): %s", len(chatIDs), message)
+	for _, chatID := range chatIDs {
+		if err := b.sendMessageToGroup(chatID, message); err != nil {
+			log.Printf("Error sending message to chat %d: %v", chatID, err)
+		}
+	}
+}
+
+func (b *Bot) sendToAllGroups(message string) {
+	chatIDs := b.snapshotChatIDs()
+	b.sendSystemMessage(chatIDs, message)
 }
 
 func (b *Bot) sendMessageToGroup(chatID int64, message string) error {
@@ -226,10 +305,13 @@ func (b *Bot) snapshotChatIDs() []int64 {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
+	return b.chatIDsSnapshotLocked()
+}
+
+func (b *Bot) chatIDsSnapshotLocked() []int64 {
 	if len(b.chatIDs) == 0 {
 		return nil
 	}
-
 	ids := make([]int64, 0, len(b.chatIDs))
 	for chatID := range b.chatIDs {
 		ids = append(ids, chatID)
@@ -251,7 +333,9 @@ func (b *Bot) loadSubscribers() error {
 	for _, id := range ids {
 		b.chatIDs[id] = true
 	}
+	count := len(b.chatIDs)
 	b.mu.Unlock()
+	log.Printf("Loaded %d subscriber(s) from store.", count)
 	return nil
 }
 
@@ -283,10 +367,12 @@ func (b *Bot) broadcastInitialStatus() {
 	b.mu.Lock()
 	b.currentGridState = gridState
 	b.previousGridState = gridState
-	hasSubscribers := len(b.chatIDs) > 0
+	subscriberCount := len(b.chatIDs)
+	hasSubscribers := subscriberCount > 0
 	b.mu.Unlock()
 
 	if hasSubscribers {
+		log.Printf("Broadcasting initial status to %d subscriber(s).", subscriberCount)
 		b.sendToAllGroups(b.statusMessageForState(gridState))
 	}
 }
